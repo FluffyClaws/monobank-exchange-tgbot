@@ -42,7 +42,7 @@ bot.onText("/rates", async (msg) => {
       (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
   );
 
-  // Send the fetched exchange rates in a formatted message
+  // Format the rates to have two decimal places and send them in a formatted message
   const rateMessage = filteredRates
     .map((rate) => {
       let currencySymbol = "";
@@ -51,7 +51,13 @@ bot.onText("/rates", async (msg) => {
       } else if (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) {
         currencySymbol = "€";
       }
-      return `${currencySymbol} ${rate.rateBuy} / ${rate.rateSell}`;
+      const formattedRateBuy = parseFloat(rate.rateBuy).toFixed(2);
+      let formattedRateSell = parseFloat(rate.rateSell).toFixed(2);
+      // If the sell rate has more than two decimal places, reduce it to two without rounding
+      if (formattedRateSell.toString().split(".")[1]?.length > 2) {
+        formattedRateSell = parseFloat(rate.rateSell.toFixed(2)).toFixed(2);
+      }
+      return `${currencySymbol} ${formattedRateBuy} / ${formattedRateSell}`;
     })
     .join("\n"); // Use newline to format the message nicely
 

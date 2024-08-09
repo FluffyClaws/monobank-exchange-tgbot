@@ -42,14 +42,14 @@ bot.onText("/rates", async (msg) => {
       (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
   );
 
-  // Format the rates to have two decimal places and send them in a formatted message
+  // Format the rates to have two decimal places and send them in a formatted message with emojis
   const rateMessage = filteredRates
     .map((rate) => {
       let currencySymbol = "";
       if (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) {
-        currencySymbol = "$";
+        currencySymbol = "🇺🇸"; // Unicode for the United States flag emoji
       } else if (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) {
-        currencySymbol = "€";
+        currencySymbol = "🇪🇺"; // Unicode for the European Union flag emoji
       }
       const formattedRateBuy = parseFloat(rate.rateBuy).toFixed(2);
       let formattedRateSell = parseFloat(rate.rateSell).toFixed(2);
@@ -62,13 +62,12 @@ bot.onText("/rates", async (msg) => {
     .join("\n"); // Use newline to format the message nicely
 
   const date = moment().utcOffset("+03:00").format("DD/MM/YYYY");
-  const time = moment.unix(rates[0].date).utcOffset("+03:00").format("HH:mm");
+  // Remove time from the date-time string
+  const formattedDate = date.split(" ")[0]; // Extract only the date part
 
   bot.sendMessage(
     chatId,
-    `Here are the latest currency rates as of ${date} ${time} GMT${moment().format(
-      "Z"
-    )}:\n${rateMessage}`
+    `Here are the latest currency rates as of ${formattedDate}:\n${rateMessage}`
   );
 });
 

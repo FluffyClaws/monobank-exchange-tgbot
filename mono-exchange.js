@@ -42,30 +42,36 @@ bot.onText("/rates", async (msg) => {
       (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
   );
 
-  // Send the fetched exchange rates in a formatted message
+  // Format the rates to have two decimal places and send them in a formatted message with emojis
   const rateMessage = filteredRates
     .map((rate) => {
       let currencySymbol = "";
       if (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) {
-        currencySymbol = "$";
+        currencySymbol = "🇺🇸"; // Unicode for the United States flag emoji
       } else if (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) {
-        currencySymbol = "€";
+        currencySymbol = "🇪🇺"; // Unicode for the European Union flag emoji
       }
-      return `${currencySymbol} ${rate.rateBuy} / ${rate.rateSell}`;
+      const formattedRateBuy = parseFloat(rate.rateBuy).toFixed(2);
+      let formattedRateSell = parseFloat(rate.rateSell).toFixed(2);
+      // If the sell rate has more than two decimal places, reduce it to two without rounding
+      if (formattedRateSell.toString().split(".")[1]?.length > 2) {
+        formattedRateSell = parseFloat(rate.rateSell.toFixed(2)).toFixed(2);
+      }
+      return `${currencySymbol} ${formattedRateBuy} / ${formattedRateSell}`;
     })
     .join("\n"); // Use newline to format the message nicely
 
   const date = moment().utcOffset("+03:00").format("DD/MM/YYYY");
-  const time = moment.unix(rates[0].date).utcOffset("+03:00").format("HH:mm");
+  // Remove time from the date-time string
+  const formattedDate = date.split(" ")[0]; // Extract only the date part
 
   bot.sendMessage(
     chatId,
-    `Here are the latest currency rates as of ${date} ${time} GMT${moment().format(
-      "Z"
-    )}:\n${rateMessage}`
+    `Here are the latest currency rates as of ${formattedDate}:\n${rateMessage}`
   );
 });
 
+// Function to fetch exchange rates from Monobank API
 async function fetchExchangeRates() {
   try {
     console.log("Fetching exchange rates from Monobank API...");
@@ -91,3 +97,42 @@ async function fetchExchangeRates() {
     return null;
   }
 }
+
+// Function to schedule the rate fetching every 15 minutes
+const startFetchingRates = () => {
+  timer = setInterval(async () => {
+    const newRates = await fetchExchangeRates();
+    if (newRates && isRatesFetched) {
+      // Check if rates have changed
+      let ratesChanged = false;
+      for (let i = 0; i < newRates.length; i++) {
+        for (let j = 0; j < cachedExchangeRates.data.length; j++) {
+          if (
+            newRates[i].currencyCodeA ===
+              cachedExchangeRates.data[j].currencyCodeA &&
+            newRates[i].currencyCodeB ===
+              cachedExchangeRates.data[j].currencyCodeB
+          ) {
+            // Compare rates for the same currency pair to see if they have changed
+            if (
+              newRates[i].rateBuy !== cachedExchangeRates.data[j].rateBuy ||
+              newRates[i].rateSell !== cachedExchangeRates.data[j].rateSell
+            ) {
+              bot.sendMessage(chatId, "Exchange rates have changed!");
+              console.log("Rates have changed:", newRates);
+              ratesChanged = true;
+            }
+            break;
+          }
+        }
+      }
+      if (!ratesChanged && newRates.length > 0) {
+        bot.sendMessage(chatId, "Exchange rates remain the same.");
+      }
+    } else {
+      console.log("Failed to fetch exchange rates");
+    }
+  }, 15 * 60 * 1000); // Run every 15 minutes
+};
+
+startFetchingRates();

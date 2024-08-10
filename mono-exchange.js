@@ -5,7 +5,7 @@ require("dotenv").config();
 
 // Replace <YOUR_API_TOKEN> with your obtained API token
 const TOKEN = process.env.TELEGRAM_API_TOKEN;
-const chatId = process.env.CHAT_ID; // Replace with the desired channel ID or user ID
+// const chatId = process.env.CHAT_ID; // Replace with the desired channel ID or user ID
 let timer;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -20,10 +20,14 @@ bot.onText("/start", async (msg) => {
   cachedExchangeRates = null;
   isRatesFetched = false;
 
+  const chatId = msg.chat.id;
+
   bot.sendMessage(chatId, "Bot reset. Use /rates to fetch currency rates.");
 });
 
 bot.onText("/rates", async (msg) => {
+  const chatId = msg.chat.id; // Get the chat ID of the user who sent the command
+
   const rates = await fetchExchangeRates();
   if (!rates || rates.length === 0) {
     bot.sendMessage(
@@ -118,6 +122,8 @@ const startFetchingRates = () => {
               newRates[i].rateBuy !== cachedExchangeRates.data[j].rateBuy ||
               newRates[i].rateSell !== cachedExchangeRates.data[j].rateSell
             ) {
+              const chatId = msg.chat.id;
+
               bot.sendMessage(chatId, "Exchange rates have changed!");
               console.log("Rates have changed:", newRates);
               ratesChanged = true;
@@ -127,6 +133,8 @@ const startFetchingRates = () => {
         }
       }
       if (!ratesChanged && newRates.length > 0) {
+        const chatId = msg.chat.id;
+
         bot.sendMessage(chatId, "Exchange rates remain the same.");
       }
     } else {

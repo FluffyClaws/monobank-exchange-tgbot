@@ -5,9 +5,9 @@ require("dotenv").config();
 
 // Replace <YOUR_API_TOKEN> with your obtained API token
 const TOKEN = process.env.TELEGRAM_API_TOKEN;
-let chatIds = [];
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+let chatIds = [];
 let cachedExchangeRates = {};
 
 bot.onText("/start", async (msg) => {
@@ -117,37 +117,37 @@ async function fetchExchangeRates() {
 const startFetchingRates = () => {
   timer = setInterval(async () => {
     const now = moment().unix();
-    let cachedTimestamp;
-    let filteredRates;
 
-    // Loop through all users and fetch rates for each
+    // Loop through all users and check if cached rates are present and younger than 15 minutes
     for (let chatId of chatIds) {
-      if (cachedExchangeRates[chatId]) {
-        cachedTimestamp = cachedExchangeRates[chatId].timestamp;
-        filteredRates = cachedExchangeRates[chatId].data.filter(
-          (rate) =>
-            (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) ||
-            (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
-        );
-      } else {
-        console.log(`No cached rates available for chatId ${chatId}`);
-        filteredRates = [];
+      if (
+        cachedExchangeRates[chatId] &&
+        cachedExchangeRates[chatId].timestamp >= now - 15 * 60 * 1000
+      ) {
+        bot.sendMessage(chatId, "Cached exchange rates are up to date.");
+        continue;
       }
 
-      if (cachedTimestamp && cachedTimestamp < now - 15 * 60 * 1000) {
-        const newRates = await fetchExchangeRates(chatId);
+      // If cached rates don't exist or are older than 15 minutes, fetch new ones
+      const newRates = await fetchExchangeRates(chatId);
+
+      if (newRates && newRates.length > 0) {
         let ratesChanged = false;
 
         for (let i = 0; i < newRates.length; i++) {
-          for (let j = 0; j < filteredRates.length; j++) {
+          for (let j = 0; j < cachedExchangeRates[chatId].data.length; j++) {
             if (
-              newRates[i].currencyCodeA === filteredRates[j].currencyCodeA &&
-              newRates[i].currencyCodeB === filteredRates[j].currencyCodeB
+              newRates[i].currencyCodeA ===
+                cachedExchangeRates[chatId].data[j].currencyCodeA &&
+              newRates[i].currencyCodeB ===
+                cachedExchangeRates[chatId].data[j].currencyCodeB
             ) {
               // Compare rates for the same currency pair to see if they have changed
               if (
-                newRates[i].rateBuy !== filteredRates[j].rateBuy ||
-                newRates[i].rateSell !== filteredRates[j].rateSell
+                newRates[i].rateBuy !==
+                  cachedExchangeRates[chatId].data[j].rateBuy ||
+                newRates[i].rateSell !==
+                  cachedExchangeRates[chatId].data[j].rateSell
               ) {
                 bot.sendMessage(chatId, "Exchange rates have changed for you!");
                 console.log("Rates have changed:", newRates);

@@ -8,33 +8,30 @@ const TOKEN = process.env.TELEGRAM_API_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 let chatIds = [];
-let cachedExchangeRates = {};
+let cachedExchangeRates = { data: [], timestamp: null }; // Global cache for all users
+let lastFetchTime = null;
 
 bot.onText("/start", async (msg) => {
   const chatId = msg.chat.id;
   if (!chatIds.includes(chatId)) {
     chatIds.push(chatId);
   }
-  startFetchingRates(msg);
-
   bot.sendMessage(chatId, "Bot reset. Use /rates to fetch currency rates.");
 });
 
 bot.onText("/rates", async (msg) => {
   const chatId = msg.chat.id;
 
-  // Initialize the cache for this user if it doesn't exist
-  if (!cachedExchangeRates[chatId]) {
-    cachedExchangeRates[chatId] = {};
-  }
-
   // Calculate the time difference between now and when the rates were last fetched
   const now = moment().unix();
-  const timeDiff = now - (cachedExchangeRates[chatId].timestamp || 0);
 
-  if (!cachedExchangeRates[chatId].data && timeDiff >= 15 * 60) {
-    // If there are no cached rates and they are older than 15 minutes, fetch new ones
-    const rates = await fetchExchangeRates(chatId);
+  if (lastFetchTime && now - lastFetchTime < 15 * 60) {
+    // Use global cached data if it is less than 15 minutes old
+    const filteredRates = filterRates(cachedExchangeRates.data);
+    sendRatesMessage(chatId, filteredRates, lastFetchTime);
+  } else {
+    // Fetch new rates and update global cache
+    const rates = await fetchExchangeRates();
     if (!rates || rates.length === 0) {
       bot.sendMessage(
         chatId,
@@ -42,48 +39,14 @@ bot.onText("/rates", async (msg) => {
       );
       return;
     }
-    cachedExchangeRates[chatId] = { timestamp: moment().unix(), data: rates };
-  } else if (timeDiff < 15 * 60) {
-    // If cached rates are less than 15 minutes old, use them
-    const filteredRates = cachedExchangeRates[chatId].data.filter(
-      (rate) =>
-        (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) ||
-        (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
-    );
+
+    // Update global cache
+    cachedExchangeRates = { timestamp: now, data: rates };
+    lastFetchTime = now;
+
+    const filteredRates = filterRates(rates);
+    sendRatesMessage(chatId, filteredRates, now);
   }
-
-  // Filter out the unwanted currency pairs
-  const filteredRates = cachedExchangeRates[chatId].data.filter(
-    (rate) =>
-      (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) ||
-      (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
-  );
-
-  // Format the rates to have two decimal places and send them in a formatted message with emojis
-  const rateMessage = filteredRates
-    .map((rate) => {
-      let currencySymbol = "";
-      if (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) {
-        currencySymbol = "🇺🇸"; // Unicode for the US flag
-      } else if (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) {
-        currencySymbol = "🇪🇺"; // Unicode for the EU flag
-      }
-      const formattedRateBuy = parseFloat(rate.rateBuy).toFixed(2);
-      let formattedRateSell = parseFloat(rate.rateSell).toFixed(2);
-      if (formattedRateSell.toString().split(".")[1]?.length > 2) {
-        formattedRateSell = rate.rateSell.toFixed(2);
-      }
-      return `${currencySymbol} ${formattedRateBuy} / ${formattedRateSell}`;
-    })
-    .join("\n");
-
-  const date = moment().utcOffset("+03:00").format("DD/MM/YYYY");
-  const formattedDate = date.split(" ")[0]; // Extract only the date part
-
-  bot.sendMessage(
-    chatId,
-    `Here are the latest currency rates as of ${formattedDate}:\n${rateMessage}`
-  );
 });
 
 // Function to fetch exchange rates from Monobank API
@@ -113,57 +76,68 @@ async function fetchExchangeRates() {
   }
 }
 
+// Function to filter out unwanted currency pairs
+function filterRates(rates) {
+  return rates
+    ? rates.filter(
+        (rate) =>
+          (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) ||
+          (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
+      )
+    : [];
+}
+
+// Function to format and send the rates message
+function sendRatesMessage(chatId, rates, timestamp) {
+  const rateMessage = rates
+    .map((rate) => {
+      let currencySymbol = "";
+      if (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) {
+        currencySymbol = "🇺🇸"; // Unicode for the US flag
+      } else if (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) {
+        currencySymbol = "🇪🇺"; // Unicode for the EU flag
+      }
+      const formattedRateBuy = parseFloat(rate.rateBuy).toFixed(2);
+      const formattedRateSell = parseFloat(rate.rateSell).toFixed(2);
+      return `${currencySymbol} ${formattedRateBuy} / ${formattedRateSell}`;
+    })
+    .join("\n");
+
+  const formattedDate = moment
+    .unix(timestamp)
+    .utcOffset("+03:00")
+    .format("DD/MM/YYYY");
+
+  bot.sendMessage(
+    chatId,
+    `Here are the latest currency rates as of ${formattedDate}:\n${rateMessage}`
+  );
+}
+
 // Function to schedule the rate fetching every 15 minutes
 const startFetchingRates = () => {
-  timer = setInterval(async () => {
+  setInterval(async () => {
     const now = moment().unix();
 
-    // Loop through all users and check if cached rates are present and younger than 15 minutes
-    for (let chatId of chatIds) {
-      if (
-        cachedExchangeRates[chatId] &&
-        cachedExchangeRates[chatId].timestamp >= now - 15 * 60 * 1000
-      ) {
-        bot.sendMessage(chatId, "Cached exchange rates are up to date.");
-        continue;
+    // Fetch new rates if the cache is older than 15 minutes or never fetched
+    if (!lastFetchTime || now - lastFetchTime >= 15 * 60) {
+      console.log("Fetching fresh exchange rates...");
+      const newRates = await fetchExchangeRates();
+      if (newRates && Object.keys(newRates).length > 0) {
+        cachedExchangeRates = { timestamp: now, data: newRates };
+        lastFetchTime = now;
+
+        // Notify all users of the updated rates
+        chatIds.forEach((chatId) => {
+          const filteredRates = filterRates(newRates);
+          sendRatesMessage(chatId, filteredRates, now);
+        });
+      } else {
+        console.error("Failed to fetch new exchange rates.");
       }
-
-      // If cached rates don't exist or are older than 15 minutes, fetch new ones
-      const newRates = await fetchExchangeRates(chatId);
-
-      if (newRates && newRates.length > 0) {
-        let ratesChanged = false;
-
-        for (let i = 0; i < newRates.length; i++) {
-          for (let j = 0; j < cachedExchangeRates[chatId].data.length; j++) {
-            if (
-              newRates[i].currencyCodeA ===
-                cachedExchangeRates[chatId].data[j].currencyCodeA &&
-              newRates[i].currencyCodeB ===
-                cachedExchangeRates[chatId].data[j].currencyCodeB
-            ) {
-              // Compare rates for the same currency pair to see if they have changed
-              if (
-                newRates[i].rateBuy !==
-                  cachedExchangeRates[chatId].data[j].rateBuy ||
-                newRates[i].rateSell !==
-                  cachedExchangeRates[chatId].data[j].rateSell
-              ) {
-                bot.sendMessage(chatId, "Exchange rates have changed for you!");
-                console.log("Rates have changed:", newRates);
-                ratesChanged = true;
-              }
-              break;
-            }
-          }
-        }
-
-        if (ratesChanged) {
-          cachedExchangeRates[chatId] = { timestamp: now, data: newRates };
-        } else {
-          bot.sendMessage(chatId, "Exchange rates remain the same for you.");
-        }
-      }
+    } else {
+      console.log("Using cached exchange rates.");
     }
   }, 15 * 60 * 1000); // Run every 15 minutes
 };
+startFetchingRates();

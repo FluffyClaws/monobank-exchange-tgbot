@@ -11,6 +11,11 @@ let chatIds = [];
 let cachedExchangeRates = { data: [], timestamp: null }; // Global cache for all users
 let lastFetchTime = null;
 
+// Helper function to get current timestamp
+function getCurrentTimestamp() {
+  return moment().format("YYYY-MM-DD HH:mm:ss");
+}
+
 bot.onText("/start", async (msg) => {
   const chatId = msg.chat.id;
   if (!chatIds.includes(chatId)) {
@@ -52,26 +57,35 @@ bot.onText("/rates", async (msg) => {
 // Function to fetch exchange rates from Monobank API
 async function fetchExchangeRates() {
   try {
-    console.log("Fetching exchange rates from Monobank API...");
+    console.log(
+      `[${getCurrentTimestamp()}] Fetching exchange rates from Monobank API...`
+    );
     const response = await axios.get("https://api.monobank.ua/bank/currency");
 
     if (response.status === 429) {
-      console.error("Too many requests to the API. Please try again later.");
+      console.error(
+        `[${getCurrentTimestamp()}] Too many requests to the API. Please try again later.`
+      );
       return null;
     }
 
     if (response.status !== 200) {
       console.error(
-        `Failed to fetch exchange rates from Monobank API: ${response.statusText}`
+        `[${getCurrentTimestamp()}] Failed to fetch exchange rates from Monobank API: ${
+          response.statusText
+        }`
       );
       return null;
     }
 
     const data = response.data;
-    console.log("Fetched exchange rates:", data); // Log the fetched data for debugging
+    console.log(`[${getCurrentTimestamp()}] Fetched exchange rates:`, data); // Log the fetched data for debugging
     return data;
   } catch (error) {
-    console.error("Error fetching exchange rates from Monobank API:", error);
+    console.error(
+      `[${getCurrentTimestamp()}] Error fetching exchange rates from Monobank API:`,
+      error
+    );
     return null;
   }
 }
@@ -85,6 +99,32 @@ function filterRates(rates) {
           (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
       )
     : [];
+}
+
+// Function to compare rates
+function ratesHaveChanged(oldRates, newRates) {
+  if (oldRates.length !== newRates.length) {
+    return true;
+  }
+
+  for (let i = 0; i < oldRates.length; i++) {
+    const oldRate = oldRates[i];
+    const newRate = newRates.find(
+      (rate) =>
+        rate.currencyCodeA === oldRate.currencyCodeA &&
+        rate.currencyCodeB === oldRate.currencyCodeB
+    );
+
+    if (
+      !newRate ||
+      oldRate.rateBuy !== newRate.rateBuy ||
+      oldRate.rateSell !== newRate.rateSell
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // Function to format and send the rates message
@@ -121,22 +161,31 @@ const startFetchingRates = () => {
 
     // Fetch new rates if the cache is older than 15 minutes or never fetched
     if (!lastFetchTime || now - lastFetchTime >= 15 * 60) {
-      console.log("Fetching fresh exchange rates...");
+      console.log(
+        `[${getCurrentTimestamp()}] Fetching fresh exchange rates...`
+      );
       const newRates = await fetchExchangeRates();
       if (newRates && Object.keys(newRates).length > 0) {
-        cachedExchangeRates = { timestamp: now, data: newRates };
-        lastFetchTime = now;
+        if (ratesHaveChanged(cachedExchangeRates.data, newRates)) {
+          // Update global cache
+          cachedExchangeRates = { timestamp: now, data: newRates };
+          lastFetchTime = now;
 
-        // Notify all users of the updated rates
-        chatIds.forEach((chatId) => {
-          const filteredRates = filterRates(newRates);
-          sendRatesMessage(chatId, filteredRates, now);
-        });
+          // Notify all users of the updated rates
+          chatIds.forEach((chatId) => {
+            const filteredRates = filterRates(newRates);
+            sendRatesMessage(chatId, filteredRates, now);
+          });
+        } else {
+          console.log(`[${getCurrentTimestamp()}] Rates have not changed.`);
+        }
       } else {
-        console.error("Failed to fetch new exchange rates.");
+        console.error(
+          `[${getCurrentTimestamp()}] Failed to fetch new exchange rates.`
+        );
       }
     } else {
-      console.log("Using cached exchange rates.");
+      console.log(`[${getCurrentTimestamp()}] Using cached exchange rates.`);
     }
   }, 15 * 60 * 1000); // Run every 15 minutes
 };

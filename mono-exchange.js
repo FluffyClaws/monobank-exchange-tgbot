@@ -71,6 +71,7 @@ bot.onText("/rates", async (msg) => {
   );
 });
 
+// Function to fetch exchange rates from Monobank API
 async function fetchExchangeRates() {
   try {
     console.log("Fetching exchange rates from Monobank API...");
@@ -96,3 +97,42 @@ async function fetchExchangeRates() {
     return null;
   }
 }
+
+// Function to schedule the rate fetching every 15 minutes
+const startFetchingRates = () => {
+  timer = setInterval(async () => {
+    const newRates = await fetchExchangeRates();
+    if (newRates && isRatesFetched) {
+      // Check if rates have changed
+      let ratesChanged = false;
+      for (let i = 0; i < newRates.length; i++) {
+        for (let j = 0; j < cachedExchangeRates.data.length; j++) {
+          if (
+            newRates[i].currencyCodeA ===
+              cachedExchangeRates.data[j].currencyCodeA &&
+            newRates[i].currencyCodeB ===
+              cachedExchangeRates.data[j].currencyCodeB
+          ) {
+            // Compare rates for the same currency pair to see if they have changed
+            if (
+              newRates[i].rateBuy !== cachedExchangeRates.data[j].rateBuy ||
+              newRates[i].rateSell !== cachedExchangeRates.data[j].rateSell
+            ) {
+              bot.sendMessage(chatId, "Exchange rates have changed!");
+              console.log("Rates have changed:", newRates);
+              ratesChanged = true;
+            }
+            break;
+          }
+        }
+      }
+      if (!ratesChanged && newRates.length > 0) {
+        bot.sendMessage(chatId, "Exchange rates remain the same.");
+      }
+    } else {
+      console.log("Failed to fetch exchange rates");
+    }
+  }, 15 * 60 * 1000); // Run every 15 minutes
+};
+
+startFetchingRates();

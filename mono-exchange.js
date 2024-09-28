@@ -5,7 +5,7 @@ require("dotenv").config();
 
 // Replace <YOUR_API_TOKEN> with your obtained API token
 const TOKEN = process.env.TELEGRAM_API_TOKEN;
-const bot = new TelegramBot(TOKEN, { polling: true });
+let bot = new TelegramBot(TOKEN, { polling: true });
 
 let chatIds = [];
 let cachedExchangeRates = { data: [], timestamp: null }; // Global cache for all users
@@ -14,6 +14,26 @@ let lastFetchTime = null;
 // Helper function to get current timestamp
 function getCurrentTimestamp() {
   return moment().format("YYYY-MM-DD HH:mm:ss");
+}
+
+// Handle polling errors
+bot.on("polling_error", (error) => {
+  console.error(`[${getCurrentTimestamp()}] Polling error:`, error.message);
+
+  // Check if the error code indicates a fatal error
+  if (error.code === "EFATAL") {
+    console.log(`[${getCurrentTimestamp()}] Restarting the bot...`);
+    restartBot();
+  }
+});
+
+// Function to restart the bot
+function restartBot() {
+  bot.stopPolling(); // Stop the current polling
+  setTimeout(() => {
+    bot = new TelegramBot(TOKEN, { polling: true }); // Recreate the bot instance
+    console.log(`[${getCurrentTimestamp()}] Bot restarted successfully.`);
+  }, 5000); // Wait for 5 seconds before restarting
 }
 
 // Handle /start command

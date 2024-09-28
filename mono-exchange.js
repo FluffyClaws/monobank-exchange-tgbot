@@ -16,7 +16,8 @@ function getCurrentTimestamp() {
   return moment().format("YYYY-MM-DD HH:mm:ss");
 }
 
-bot.onText("/start", async (msg) => {
+// Handle /start command
+bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   if (!chatIds.includes(chatId)) {
     chatIds.push(chatId);
@@ -24,10 +25,9 @@ bot.onText("/start", async (msg) => {
   bot.sendMessage(chatId, "Bot reset. Use /rates to fetch currency rates.");
 });
 
-bot.onText("/rates", async (msg) => {
+// Handle /rates command
+bot.onText(/\/rates/, async (msg) => {
   const chatId = msg.chat.id;
-
-  // Calculate the time difference between now and when the rates were last fetched
   const now = moment().unix();
 
   if (lastFetchTime && now - lastFetchTime < 15 * 60) {
@@ -54,7 +54,7 @@ bot.onText("/rates", async (msg) => {
   }
 });
 
-// Function to fetch exchange rates from Monobank API
+// Function to fetch exchange rates from Monobank API with retries
 async function fetchExchangeRates() {
   try {
     console.log(
@@ -64,14 +64,15 @@ async function fetchExchangeRates() {
 
     if (response.status === 429) {
       console.error(
-        `[${getCurrentTimestamp()}] Too many requests to the API. Please try again later.`
+        `[${getCurrentTimestamp()}] Too many requests. Retrying in 30 seconds...`
       );
-      return null;
+      await new Promise((resolve) => setTimeout(resolve, 30 * 1000)); // Retry after 30 seconds
+      return await fetchExchangeRates(); // Retry the request
     }
 
     if (response.status !== 200) {
       console.error(
-        `[${getCurrentTimestamp()}] Failed to fetch exchange rates from Monobank API: ${
+        `[${getCurrentTimestamp()}] Failed to fetch exchange rates: ${
           response.statusText
         }`
       );
@@ -79,7 +80,7 @@ async function fetchExchangeRates() {
     }
 
     const data = response.data;
-    console.log(`[${getCurrentTimestamp()}] Fetched exchange rates:`, data); // Log the fetched data for debugging
+    console.log(`[${getCurrentTimestamp()}] Fetched exchange rates:`, data);
     return data;
   } catch (error) {
     console.error(
@@ -90,22 +91,20 @@ async function fetchExchangeRates() {
   }
 }
 
-// Function to filter out unwanted currency pairs
+// Function to filter out unwanted currency pairs (USD/UAH and EUR/UAH)
 function filterRates(rates) {
   return rates
     ? rates.filter(
         (rate) =>
-          (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) ||
-          (rate.currencyCodeA === 978 && rate.currencyCodeB === 980)
+          (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) || // USD/UAH
+          (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) // EUR/UAH
       )
     : [];
 }
 
-// Function to compare rates
+// Function to check if rates have changed
 function ratesHaveChanged(oldRates, newRates) {
-  if (oldRates.length !== newRates.length) {
-    return true;
-  }
+  if (oldRates.length !== newRates.length) return true;
 
   for (let i = 0; i < oldRates.length; i++) {
     const oldRate = oldRates[i];
@@ -123,7 +122,6 @@ function ratesHaveChanged(oldRates, newRates) {
       return true;
     }
   }
-
   return false;
 }
 
@@ -190,3 +188,19 @@ const startFetchingRates = () => {
   }, 15 * 60 * 1000); // Run every 15 minutes
 };
 startFetchingRates();
+
+// Global error handling
+process.on("uncaughtException", (err) => {
+  console.error(`[${getCurrentTimestamp()}] Uncaught exception:`, err);
+  // Optionally restart or notify yourself via Telegram
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error(
+    `[${getCurrentTimestamp()}] Unhandled rejection at:`,
+    promise,
+    "Reason:",
+    reason
+  );
+  // Optionally restart or notify yourself via Telegram
+});

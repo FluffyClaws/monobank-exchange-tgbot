@@ -79,9 +79,7 @@ async function fetchExchangeRates() {
       return null;
     }
 
-    const data = response.data;
-    console.log(`[${getCurrentTimestamp()}] Fetched exchange rates:`, data);
-    return data;
+    return response.data; // Return fetched data directly
   } catch (error) {
     console.error(
       `[${getCurrentTimestamp()}] Error fetching exchange rates from Monobank API:`,
@@ -127,6 +125,12 @@ function ratesHaveChanged(oldRates, newRates) {
 
 // Function to format and send the rates message
 function sendRatesMessage(chatId, rates, timestamp) {
+  // Log the raw rates before formatting the message
+  console.log(
+    `[${getCurrentTimestamp()}] Sending raw rates to chat ${chatId}:`,
+    rates
+  );
+
   const rateMessage = rates
     .map((rate) => {
       let currencySymbol = "";
@@ -192,7 +196,6 @@ startFetchingRates();
 // Global error handling
 process.on("uncaughtException", (err) => {
   console.error(`[${getCurrentTimestamp()}] Uncaught exception:`, err);
-  // Optionally restart or notify yourself via Telegram
 });
 
 process.on("unhandledRejection", (reason, promise) => {
@@ -202,5 +205,4 @@ process.on("unhandledRejection", (reason, promise) => {
     "Reason:",
     reason
   );
-  // Optionally restart or notify yourself via Telegram
 });

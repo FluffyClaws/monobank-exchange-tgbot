@@ -1,228 +1,227 @@
+const fs = require("fs");
+const path = require("path");
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-const moment = require("moment");
 require("dotenv").config();
 
-// Replace <YOUR_API_TOKEN> with your obtained API token
 const TOKEN = process.env.TELEGRAM_API_TOKEN;
-let bot = new TelegramBot(TOKEN, { polling: true });
+const TIMEZONE = process.env.TZ || "Europe/Kyiv";
+const FETCH_INTERVAL = 15 * 60; // seconds
+const LOG_FILE = path.join(__dirname, "bot.log");
+
+const bot = new TelegramBot(TOKEN, { polling: true });
+const CURRENCY_MAP = { "840:980": "🇺🇸", "978:980": "🇪🇺" };
 
 let chatIds = [];
-let cachedExchangeRates = { data: [], timestamp: null }; // Global cache for all users
-let lastFetchTime = null;
+let cachedExchangeRates = { data: [], timestamp: 0 };
 
-// Helper function to get current timestamp
+
+
+
+
+
 function getCurrentTimestamp() {
-  return moment().format("YYYY-MM-DD HH:mm:ss");
+  return new Date().toISOString().replace("T", " ").split(".")[0];
 }
 
-// Handle polling errors
-bot.on("polling_error", (error) => {
-  console.error(`[${getCurrentTimestamp()}] Polling error:`, error.message);
+function writeLog(entry) {
+  const line = `[${getCurrentTimestamp()}] ${entry}\n`;
+  fs.appendFileSync(LOG_FILE, line);
+  console.log(line.trim());
+}
 
-  // Check if the error code indicates a fatal error
-  if (error.code === "EFATAL") {
-    console.log(`[${getCurrentTimestamp()}] Restarting the bot...`);
-    restartBot();
+function log(msg, ...args) {
+  const formatted = [msg, ...args].map((a) => (typeof a === "object" ? JSON.stringify(a) : a)).join(" ");
+  writeLog(formatted);
+}
+
+
+
+
+
+
+bot.on("polling_error", (err) => {
+  log(`Polling error: ${err.message}`);
+  if (err.code === "EFATAL") {
+    log("Restarting bot polling...");
+    bot.stopPolling()
+      .then(() => bot.startPolling())
+      .then(() => log("Bot restarted successfully"))
+      .catch((e) => log("Bot restart failed:", e.message));
   }
 });
 
-// Function to restart the bot
-function restartBot() {
-  bot.stopPolling(); // Stop the current polling
-  setTimeout(() => {
-    bot = new TelegramBot(TOKEN, { polling: true }); // Recreate the bot instance
-    console.log(`[${getCurrentTimestamp()}] Bot restarted successfully.`);
-  }, 5000); // Wait for 5 seconds before restarting
-}
+process.on("SIGTERM", async () => {
+  log("SIGTERM received, stopping polling...");
+  await bot.stopPolling();
+  process.exit(0);
+});
 
-// Handle /start command
-bot.onText(/\/start/, async (msg) => {
+process.on("uncaughtException", (err) => log("Uncaught exception:", err));
+process.on("unhandledRejection", (reason) => log("Unhandled rejection:", reason));
+
+
+
+
+
+
+bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  if (!chatIds.includes(chatId)) {
-    chatIds.push(chatId);
-  }
-  bot.sendMessage(chatId, "Bot reset. Use /rates to fetch currency rates.");
+  if (!chatIds.includes(chatId)) chatIds.push(chatId);
+  bot.sendMessage(chatId, "Bot active. Use /rates to view currency rates.");
 });
 
-// Handle /rates command
 bot.onText(/\/rates/, async (msg) => {
   const chatId = msg.chat.id;
-  const now = moment().unix();
+  const now = Math.floor(Date.now() / 1000);
+  const cacheAge = now - cachedExchangeRates.timestamp;
 
-  if (lastFetchTime && now - lastFetchTime < 15 * 60) {
-    // Use global cached data if it is less than 15 minutes old
-    const filteredRates = filterRates(cachedExchangeRates.data);
-    sendRatesMessage(chatId, filteredRates, lastFetchTime);
-  } else {
-    // Fetch new rates and update global cache
-    const rates = await fetchExchangeRates();
-    if (!rates || rates.length === 0) {
-      bot.sendMessage(
-        chatId,
-        "Failed to fetch exchange rates. Please try again later."
-      );
-      return;
-    }
-
-    // Update global cache
-    cachedExchangeRates = { timestamp: now, data: rates };
-    lastFetchTime = now;
-
-    const filteredRates = filterRates(rates);
-    sendRatesMessage(chatId, filteredRates, now);
+  if (cacheAge < FETCH_INTERVAL && cachedExchangeRates.data.length > 0) {
+    sendRatesMessage(
+      chatId,
+      filterRates(cachedExchangeRates.data),
+      cachedExchangeRates.timestamp,
+      true
+    );
+    return;
   }
+
+  const rates = await fetchExchangeRates();
+  if (!rates || rates.length === 0) {
+    bot.sendMessage(chatId, "Failed to fetch exchange rates. Try again later.");
+    return;
+  }
+
+  cachedExchangeRates = { data: rates, timestamp: now };
+  sendRatesMessage(chatId, filterRates(rates), now, false);
 });
 
-// Function to fetch exchange rates from Monobank API with retries
-async function fetchExchangeRates() {
-  try {
-    console.log(
-      `[${getCurrentTimestamp()}] Fetching exchange rates from Monobank API...`
-    );
-    const response = await axios.get("https://api.monobank.ua/bank/currency");
 
-    if (response.status === 429) {
-      console.error(
-        `[${getCurrentTimestamp()}] Too many requests. Retrying in 30 seconds...`
-      );
-      await new Promise((resolve) => setTimeout(resolve, 30 * 1000)); // Retry after 30 seconds
-      return await fetchExchangeRates(); // Retry the request
+
+
+async function fetchExchangeRates(retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      log("Fetching exchange rates from Monobank API...");
+      const res = await axios.get("https://api.monobank.ua/bank/currency");
+      if (res.status === 200) return res.data;
+      if (res.status === 429) {
+        log("Too many requests. Waiting 30s...");
+        await new Promise((r) => setTimeout(r, 30000));
+      } else {
+        log(`Unexpected status ${res.status}`);
+      }
+    } catch (err) {
+      log("Error fetching exchange rates:", err.message);
+      await new Promise((r) => setTimeout(r, 5000));
     }
-
-    if (response.status !== 200) {
-      console.error(
-        `[${getCurrentTimestamp()}] Failed to fetch exchange rates: ${
-          response.statusText
-        }`
-      );
-      return null;
-    }
-
-    return response.data; // Return fetched data directly
-  } catch (error) {
-    console.error(
-      `[${getCurrentTimestamp()}] Error fetching exchange rates from Monobank API:`,
-      error
-    );
-    return null;
   }
+  return null;
 }
 
-// Function to filter out unwanted currency pairs (USD/UAH and EUR/UAH)
 function filterRates(rates) {
-  return rates
-    ? rates.filter(
-        (rate) =>
-          (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) || // USD/UAH
-          (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) // EUR/UAH
-      )
-    : [];
+  return rates.filter(
+    (r) =>
+      (r.currencyCodeA === 840 && r.currencyCodeB === 980) ||
+      (r.currencyCodeA === 978 && r.currencyCodeB === 980)
+  );
 }
 
-// Function to check if rates have changed
 function ratesHaveChanged(oldRates, newRates) {
   if (oldRates.length !== newRates.length) return true;
-
-  for (let i = 0; i < oldRates.length; i++) {
-    const oldRate = oldRates[i];
+  return oldRates.some((oldRate) => {
     const newRate = newRates.find(
-      (rate) =>
-        rate.currencyCodeA === oldRate.currencyCodeA &&
-        rate.currencyCodeB === oldRate.currencyCodeB
+      (r) =>
+        r.currencyCodeA === oldRate.currencyCodeA &&
+        r.currencyCodeB === oldRate.currencyCodeB
     );
-
-    if (
+    return (
       !newRate ||
       oldRate.rateBuy !== newRate.rateBuy ||
       oldRate.rateSell !== newRate.rateSell
-    ) {
-      return true;
-    }
-  }
-  return false;
+    );
+  });
 }
 
-// Function to format and send the rates message
-function sendRatesMessage(chatId, rates, timestamp) {
-  // Log the raw rates before formatting the message
-  console.log(
-    `[${getCurrentTimestamp()}] Sending raw rates to chat ${chatId}:`,
-    rates
-  );
 
+
+
+
+
+
+
+function sendRatesMessage(chatId, rates, timestamp, isCached = false) {
   const rateMessage = rates
-    .map((rate) => {
-      let currencySymbol = "";
-      if (rate.currencyCodeA === 840 && rate.currencyCodeB === 980) {
-        currencySymbol = "🇺🇸"; // Unicode for the US flag
-      } else if (rate.currencyCodeA === 978 && rate.currencyCodeB === 980) {
-        currencySymbol = "🇪🇺"; // Unicode for the EU flag
-      }
-      const formattedRateBuy = parseFloat(rate.rateBuy).toFixed(2);
-      const formattedRateSell = parseFloat(rate.rateSell).toFixed(2);
-      return `${currencySymbol} ${formattedRateBuy} / ${formattedRateSell}`;
+    .map((r) => {
+      const symbol = CURRENCY_MAP[`${r.currencyCodeA}:${r.currencyCodeB}`] || "";
+      return `${symbol} ${r.rateBuy.toFixed(2)} / ${r.rateSell.toFixed(2)}`;
     })
     .join("\n");
 
-  const formattedDate = moment
-    .unix(timestamp)
-    .utcOffset("+03:00")
-    .format("DD/MM/YYYY");
+  const dateTime = new Date(timestamp * 1000).toLocaleString("en-GB", {
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
-  bot.sendMessage(
-    chatId,
-    `Here are the latest currency rates as of ${formattedDate}:\n${rateMessage}`
-  );
+  let messageHeader = `Rates as of ${dateTime}`;
+  if (isCached) {
+    const cachedTime = new Date(timestamp * 1000).toLocaleTimeString("en-GB", {
+      timeZone: TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    messageHeader += ` (Cached at ${cachedTime})`;
+  }
+
+  const fullMessage = `${messageHeader}:\n${rateMessage}`;
+  bot.sendMessage(chatId, fullMessage);
+  log(`Sent rates to ${chatId}: ${fullMessage.replace(/\n/g, " | ")}`);
 }
 
-// Function to schedule the rate fetching every 15 minutes
-const startFetchingRates = () => {
-  setInterval(async () => {
-    const now = moment().unix();
 
-    // Fetch new rates if the cache is older than 15 minutes or never fetched
-    if (!lastFetchTime || now - lastFetchTime >= 15 * 60) {
-      console.log(
-        `[${getCurrentTimestamp()}] Fetching fresh exchange rates...`
-      );
-      const newRates = await fetchExchangeRates();
-      if (newRates && Object.keys(newRates).length > 0) {
-        if (ratesHaveChanged(cachedExchangeRates.data, newRates)) {
-          // Update global cache
-          cachedExchangeRates = { timestamp: now, data: newRates };
-          lastFetchTime = now;
 
-          // Notify all users of the updated rates
-          chatIds.forEach((chatId) => {
-            const filteredRates = filterRates(newRates);
-            sendRatesMessage(chatId, filteredRates, now);
-          });
-        } else {
-          console.log(`[${getCurrentTimestamp()}] Rates have not changed.`);
-        }
-      } else {
-        console.error(
-          `[${getCurrentTimestamp()}] Failed to fetch new exchange rates.`
-        );
-      }
-    } else {
-      console.log(`[${getCurrentTimestamp()}] Using cached exchange rates.`);
-    }
-  }, 15 * 60 * 1000); // Run every 15 minutes
-};
-startFetchingRates();
 
-// Global error handling
-process.on("uncaughtException", (err) => {
-  console.error(`[${getCurrentTimestamp()}] Uncaught exception:`, err);
-});
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error(
-    `[${getCurrentTimestamp()}] Unhandled rejection at:`,
-    promise,
-    "Reason:",
-    reason
-  );
-});
+
+
+
+async function updateRates() {
+  const now = Math.floor(Date.now() / 1000);
+  const cacheAge = now - cachedExchangeRates.timestamp;
+  if (cacheAge < FETCH_INTERVAL) {
+    log("Using cached exchange rates.");
+    return;
+  }
+
+  log("Fetching fresh exchange rates...");
+  const newRates = await fetchExchangeRates();
+  if (!newRates) {
+    log("Failed to fetch new rates.");
+    return;
+  }
+
+  if (ratesHaveChanged(cachedExchangeRates.data, newRates)) {
+    cachedExchangeRates = { data: newRates, timestamp: now };
+    const formattedTime = new Date(now * 1000).toLocaleString("en-GB", {
+      timeZone: TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    log(`Rates updated at ${formattedTime}: ${JSON.stringify(filterRates(newRates))}`);
+
+    chatIds.forEach((id) =>
+      sendRatesMessage(id, filterRates(newRates), cachedExchangeRates.timestamp)
+    );
+  } else {
+    log("Rates unchanged.");
+  }
+}
+
+setInterval(updateRates, FETCH_INTERVAL * 1000);
